@@ -6,7 +6,7 @@ import { useAuth } from "../contexts/AuthContext";
 
 const SEGMENTS = 30;
 
-export default function Header({ stats, completedCount, onLoginClick, onLeaderboardClick }) {
+export default function Header({ stats, userXP = 0, completedCount, onLoginClick, onLeaderboardClick }) {
   const { user, logout } = useAuth();
   const total = stats?.totalSteps || 0;
   const progress = total > 0 ? (completedCount / total) * 100 : 0;
@@ -76,7 +76,7 @@ export default function Header({ stats, completedCount, onLoginClick, onLeaderbo
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <StatBadge label="XP" value={stats?.totalXP ?? 0} color="#f59e0b" />
+            <StatBadge label="XP" value={userXP} color="#f59e0b" />
             <StatBadge label="STEPS" value={`${completedCount}/${total}`} color="#22c55e" />
 
             {/* Leaderboard */}

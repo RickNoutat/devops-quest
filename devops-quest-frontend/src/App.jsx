@@ -25,6 +25,10 @@ function AppInner() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const resetToken = new URLSearchParams(window.location.search).get("token");
   const { completedSteps, toggle } = useCompletion();
+  const userXP = completedSteps.reduce(
+    (sum, id) => sum + (stats?.stepXpMap?.[id] ?? 0),
+    0
+  );
 
   // Chargement initial
   useEffect(() => {
@@ -51,6 +55,7 @@ function AppInner() {
     <>
       <Header
         stats={stats}
+        userXP={userXP}
         completedCount={completedSteps.length}
         onLoginClick={() => setShowAuth(true)}
         onLeaderboardClick={() => setShowLeaderboard(true)}
