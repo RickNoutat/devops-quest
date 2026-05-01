@@ -1,5 +1,5 @@
-FROM node:18-alpine
-RUN apk add --no-cache python3 make g++
+FROM node:20-slim
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@9 --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
