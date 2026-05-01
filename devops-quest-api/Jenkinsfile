@@ -1,0 +1,138 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME   = "devops-quest-api"
+        DOCKER_HUB   = credentials('dockerhub-credentials')  // Jenkins credential : username/password Docker Hub
+        AZURE_VM_IP  = credentials('azure-api-ip')           // Jenkins secret text : IP publique de la VM backend
+        SSH_KEY      = credentials('azure-ssh-key')          // Jenkins SSH key : clé privée pour la VM Azure
+        JWT_SECRET   = credentials('jwt-secret')             // Jenkins secret text : JWT_SECRET de production
+        FRONTEND_URL = credentials('frontend-url')           // Jenkins secret text : URL publique du frontend
+        SMTP_USER    = credentials('smtp-user')              // Jenkins secret text : adresse email SMTP
+        SMTP_PASS    = credentials('smtp-pass')              // Jenkins secret text : mot de passe application Gmail
+    }
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        // ── 1. Récupération du code ─────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                sh 'echo "Commit : $(git rev-parse --short HEAD)"'
+            }
+        }
+
+        // ── 2. Installation des dépendances ────────────────────────────────
+        stage('Install') {
+            steps {
+                dir('devops-quest-api') {
+                    sh 'corepack enable && corepack prepare pnpm@9 --activate'
+                    sh 'pnpm install --frozen-lockfile'
+                }
+            }
+        }
+
+        // ── 3. Tests ────────────────────────────────────────────────────────
+        stage('Test') {
+            steps {
+                dir('devops-quest-api') {
+                    // DB en mémoire pour les tests (défini dans tests/setup.js)
+                    sh 'pnpm test'
+                }
+            }
+            post {
+                failure {
+                    echo 'Les tests API ont échoué — arrêt du pipeline.'
+                }
+            }
+        }
+
+        // ── 4. Build de l'image Docker ──────────────────────────────────────
+        stage('Build Docker Image') {
+            steps {
+                dir('devops-quest-api') {
+                    sh """
+                        docker build \
+                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} \
+                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest \
+                            .
+                    """
+                }
+            }
+        }
+
+        // ── 5. Push sur Docker Hub ──────────────────────────────────────────
+        stage('Push to Docker Hub') {
+            steps {
+                sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
+                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER}"
+                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest"
+            }
+            post {
+                always {
+                    sh 'docker logout'
+                }
+            }
+        }
+
+        // ── 6. Déploiement sur la VM Azure ──────────────────────────────────
+        stage('Deploy to Azure VM') {
+            steps {
+                sshagent(credentials: ['azure-ssh-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
+                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest &&
+                            docker stop devops-quest-api 2>/dev/null || true &&
+                            docker rm   devops-quest-api 2>/dev/null || true &&
+                            docker run -d \
+                                --name devops-quest-api \
+                                --restart unless-stopped \
+                                -p 3001:3001 \
+                                -e PORT=3001 \
+                                -e JWT_SECRET=${JWT_SECRET} \
+                                -e FRONTEND_URL=${FRONTEND_URL} \
+                                -e DB_PATH=/data/devops-quest.db \
+                                -e SMTP_HOST=smtp.gmail.com \
+                                -e SMTP_PORT=587 \
+                                -e SMTP_USER=${SMTP_USER} \
+                                -e SMTP_PASS=${SMTP_PASS} \
+                                -e "SMTP_FROM=DevOps Quest <${SMTP_USER}>" \
+                                -v devops-quest-data:/data \
+                                ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                        '
+                    """
+                }
+            }
+        }
+
+        // ── 7. Vérification du déploiement ──────────────────────────────────
+        stage('Health Check') {
+            steps {
+                sh """
+                    sleep 5
+                    curl -sf http://${AZURE_VM_IP}:3001/api/health | grep -q '"status":"ok"' && \
+                        echo 'API OK' || \
+                        (echo 'Health check échoué' && exit 1)
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Déploiement API réussi → http://${AZURE_VM_IP}:3001"
+        }
+        failure {
+            echo 'Pipeline échoué. Vérifie les logs ci-dessus.'
+        }
+        always {
+            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} 2>/dev/null || true"
+            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest 2>/dev/null || true"
+        }
+    }
+}

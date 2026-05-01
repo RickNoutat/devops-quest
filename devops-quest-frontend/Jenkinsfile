@@ -1,0 +1,127 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME    = "devops-quest-frontend"
+        DOCKER_HUB    = credentials('dockerhub-credentials')   // Jenkins credential : username/password Docker Hub
+        AZURE_VM_IP   = credentials('azure-frontend-ip')       // Jenkins secret text : IP publique de la VM frontend
+        SSH_KEY       = credentials('azure-ssh-key')           // Jenkins SSH key : clé privée pour la VM Azure
+        API_VM_IP     = credentials('azure-api-ip')             // Jenkins secret text : IP publique de la VM backend
+        VITE_API_URL  = "http://${API_VM_IP}:3001"             // L'API tourne sur la VM backend
+    }
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        // ── 1. Récupération du code ─────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                sh 'echo "Commit : $(git rev-parse --short HEAD)"'
+            }
+        }
+
+        // ── 2. Installation des dépendances ────────────────────────────────
+        stage('Install') {
+            steps {
+                dir('devops-quest-frontend') {
+                    sh 'corepack enable && corepack prepare pnpm@9 --activate'
+                    sh 'pnpm install --frozen-lockfile'
+                }
+            }
+        }
+
+        // ── 3. Tests ────────────────────────────────────────────────────────
+        stage('Test') {
+            steps {
+                dir('devops-quest-frontend') {
+                    sh 'pnpm test'
+                }
+            }
+            post {
+                failure {
+                    echo 'Les tests frontend ont échoué — arrêt du pipeline.'
+                }
+            }
+        }
+
+        // ── 4. Build de l'image Docker ──────────────────────────────────────
+        stage('Build Docker Image') {
+            steps {
+                dir('devops-quest-frontend') {
+                    sh """
+                        docker build \
+                            --build-arg VITE_API_URL=${VITE_API_URL} \
+                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} \
+                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest \
+                            .
+                    """
+                }
+            }
+        }
+
+        // ── 5. Push sur Docker Hub ──────────────────────────────────────────
+        stage('Push to Docker Hub') {
+            steps {
+                sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
+                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER}"
+                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest"
+            }
+            post {
+                always {
+                    sh 'docker logout'
+                }
+            }
+        }
+
+        // ── 6. Déploiement sur la VM Azure ──────────────────────────────────
+        stage('Deploy to Azure VM') {
+            steps {
+                sshagent(credentials: ['azure-ssh-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
+                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest &&
+                            docker stop devops-quest-frontend 2>/dev/null || true &&
+                            docker rm   devops-quest-frontend 2>/dev/null || true &&
+                            docker run -d \
+                                --name devops-quest-frontend \
+                                --restart unless-stopped \
+                                -p 80:80 \
+                                ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                        '
+                    """
+                }
+            }
+        }
+
+        // ── 7. Vérification du déploiement ──────────────────────────────────
+        stage('Health Check') {
+            steps {
+                sh """
+                    sleep 5
+                    curl -sf http://${AZURE_VM_IP}/ | grep -q 'DEVOPS_QUEST' && \
+                        echo 'Frontend OK' || \
+                        (echo 'Health check échoué' && exit 1)
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Déploiement frontend réussi → http://${AZURE_VM_IP}"
+        }
+        failure {
+            echo 'Pipeline échoué. Vérifie les logs ci-dessus.'
+        }
+        always {
+            // Nettoyage des images locales pour libérer de l'espace
+            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} 2>/dev/null || true"
+            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest 2>/dev/null || true"
+        }
+    }
+}
