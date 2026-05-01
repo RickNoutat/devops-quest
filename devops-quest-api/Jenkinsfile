@@ -52,26 +52,25 @@ pipeline {
             }
         }
 
-        // ── 4. Build de l'image Docker ──────────────────────────────────────
-        stage('Build Docker Image') {
+        // ── 4. Build & Push de l'image Docker (amd64 pour Azure) ─────────────
+        stage('Build & Push Docker Image') {
             steps {
                 dir('devops-quest-api') {
+                    sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
+                    sh '''
+                        docker buildx inspect dq-builder >/dev/null 2>&1 \
+                          || docker buildx create --name dq-builder --use
+                        docker buildx use dq-builder
+                    '''
                     sh """
-                        docker build \
+                        docker buildx build \
+                            --platform linux/amd64 \
+                            --push \
                             -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} \
                             -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest \
                             .
                     """
                 }
-            }
-        }
-
-        // ── 5. Push sur Docker Hub ──────────────────────────────────────────
-        stage('Push to Docker Hub') {
-            steps {
-                sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
-                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER}"
-                sh "docker push ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest"
             }
             post {
                 always {
@@ -86,9 +85,10 @@ pipeline {
                 sshagent(credentials: ['azure-ssh-key']) {
                     sh """
                         ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
-                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest &&
-                            docker stop devops-quest-api 2>/dev/null || true &&
-                            docker rm   devops-quest-api 2>/dev/null || true &&
+                            set -e
+                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                            docker stop devops-quest-api 2>/dev/null || true
+                            docker rm   devops-quest-api 2>/dev/null || true
                             docker run -d \
                                 --name devops-quest-api \
                                 --restart unless-stopped \
@@ -110,12 +110,12 @@ pipeline {
             }
         }
 
-        // ── 7. Vérification du déploiement ──────────────────────────────────
+        // ── 6. Vérification du déploiement (via Caddy/HTTPS) ────────────────
         stage('Health Check') {
             steps {
                 sh """
                     sleep 5
-                    curl -sf http://${AZURE_VM_IP}:3001/api/health | grep -q '"status":"ok"' && \
+                    curl -sf https://devopsquest.duckdns.org/api/health | grep -q '"status":"ok"' && \
                         echo 'API OK' || \
                         (echo 'Health check échoué' && exit 1)
                 """
@@ -125,14 +125,10 @@ pipeline {
 
     post {
         success {
-            echo "Déploiement API réussi → http://${AZURE_VM_IP}:3001"
+            echo "Déploiement API réussi → https://devopsquest.duckdns.org/api"
         }
         failure {
             echo 'Pipeline échoué. Vérifie les logs ci-dessus.'
-        }
-        always {
-            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} 2>/dev/null || true"
-            sh "docker rmi ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest 2>/dev/null || true"
         }
     }
 }
