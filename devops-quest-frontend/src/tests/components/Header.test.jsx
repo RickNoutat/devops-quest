@@ -23,13 +23,14 @@ vi.mock("../../contexts/AuthContext", () => ({
 
 const defaultStats = { totalSteps: 10, totalXP: 500 };
 
-function setup({ stats = defaultStats, completedCount = 0, onLoginClick = vi.fn(), onLeaderboardClick = vi.fn() } = {}) {
+function setup({ stats = defaultStats, userXP = 0, completedCount = 0, onLoginClick = vi.fn(), onLeaderboardClick = vi.fn() } = {}) {
   return {
     onLoginClick,
     onLeaderboardClick,
     ...render(
       <Header
         stats={stats}
+        userXP={userXP}
         completedCount={completedCount}
         onLoginClick={onLoginClick}
         onLeaderboardClick={onLeaderboardClick}
@@ -52,9 +53,9 @@ describe("Header — rendu de base", () => {
     expect(screen.getByText("DEVOPS_QUEST")).toBeInTheDocument();
   });
 
-  test("affiche le XP total des stats", () => {
-    setup();
-    expect(screen.getByText("500")).toBeInTheDocument();
+  test("affiche le XP de l'utilisateur (userXP)", () => {
+    setup({ userXP: 250 });
+    expect(screen.getByText("250")).toBeInTheDocument();
   });
 
   test("affiche le compteur steps complétés/total", () => {

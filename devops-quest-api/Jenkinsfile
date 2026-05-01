@@ -100,7 +100,7 @@ pipeline {
                                 -e SMTP_HOST=smtp.gmail.com \
                                 -e SMTP_PORT=587 \
                                 -e SMTP_USER=${SMTP_USER} \
-                                -e SMTP_PASS=${SMTP_PASS} \
+                                -e "SMTP_PASS=${SMTP_PASS}" \
                                 -e "SMTP_FROM=DevOps Quest <${SMTP_USER}>" \
                                 -v devops-quest-data:/data \
                                 ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
