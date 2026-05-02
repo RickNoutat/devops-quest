@@ -52,42 +52,41 @@ pipeline {
         stage('Build & Deploy on Azure VM') {
             steps {
                 sshagent(credentials: ['azure-ssh-key']) {
-                    sh """
+                    sh '''
                         rsync -az --delete \
-                            --exclude='node_modules' \
-                            --exclude='.env' \
-                            --exclude='dist' \
-                            -e 'ssh -o StrictHostKeyChecking=no' \
+                            --exclude=node_modules \
+                            --exclude=.env \
+                            --exclude=dist \
+                            -e "ssh -o StrictHostKeyChecking=no" \
                             devops-quest-frontend/ \
-                            azureuser@${AZURE_VM_IP}:~/devops-quest-frontend/
-                    """
-                    sh """
-                        ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
-                            set -e
-                            cd ~/devops-quest-frontend
-                            docker build --build-arg VITE_API_URL=${VITE_API_URL} -t devops-quest-frontend:latest .
-                            docker stop devops-quest-frontend 2>/dev/null || true
-                            docker rm   devops-quest-frontend 2>/dev/null || true
-                            docker run -d \
-                                --name devops-quest-frontend \
-                                --restart unless-stopped \
-                                -p 8080:80 \
-                                devops-quest-frontend:latest
-                        '
-                    """
+                            "azureuser@${AZURE_VM_IP}:~/devops-quest-frontend/"
+
+                        ssh -o StrictHostKeyChecking=no "azureuser@${AZURE_VM_IP}" bash <<EOF
+set -e
+cd ~/devops-quest-frontend
+docker build --build-arg "VITE_API_URL=${VITE_API_URL}" -t devops-quest-frontend:latest .
+docker stop devops-quest-frontend 2>/dev/null || true
+docker rm   devops-quest-frontend 2>/dev/null || true
+docker run -d \\
+    --name devops-quest-frontend \\
+    --restart unless-stopped \\
+    -p 8080:80 \\
+    devops-quest-frontend:latest
+EOF
+                    '''
                 }
             }
         }
 
-        // ── 6. Vérification du déploiement (via Caddy/HTTPS) ────────────────
+        // ── 5. Vérification du déploiement (via Caddy/HTTPS) ────────────────
         stage('Health Check') {
             steps {
-                sh """
+                sh '''
                     sleep 5
-                    curl -sf https://devopsquest.duckdns.org/ | grep -q 'DEVOPS_QUEST' && \
-                        echo 'Frontend OK' || \
-                        (echo 'Health check échoué' && exit 1)
-                """
+                    curl -sf https://devopsquest.duckdns.org/ | grep -q "DEVOPS_QUEST" \
+                        && echo "Frontend OK" \
+                        || { echo "Health check échoué"; exit 1; }
+                '''
             }
         }
     }
