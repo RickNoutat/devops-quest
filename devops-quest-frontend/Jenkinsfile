@@ -4,10 +4,9 @@ pipeline {
     environment {
         IMAGE_NAME    = "devops-quest-frontend"
         DOCKER_HUB    = credentials('dockerhub-credentials')   // Jenkins credential : username/password Docker Hub
-        AZURE_VM_IP   = credentials('azure-frontend-ip')       // Jenkins secret text : IP publique de la VM frontend
+        AZURE_VM_IP   = credentials('azure-frontend-ip')       // Jenkins secret text : IP publique de la VM
         SSH_KEY       = credentials('azure-ssh-key')           // Jenkins SSH key : clé privée pour la VM Azure
-        API_VM_IP     = credentials('azure-api-ip')             // Jenkins secret text : IP publique de la VM backend
-        VITE_API_URL  = "http://${API_VM_IP}:3001"             // L'API tourne sur la VM backend
+        VITE_API_URL  = "https://devopsquest.duckdns.org"      // Frontend appelle l'API via Caddy (HTTPS)
     }
 
     options {
@@ -49,49 +48,31 @@ pipeline {
             }
         }
 
-        // ── 4. Build & Push Docker (amd64 pour Azure) ─────────────────────
-        stage('Build & Push Docker Image') {
-            steps {
-                dir('devops-quest-frontend') {
-                    sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
-                    sh '''
-                        docker buildx inspect dq-builder >/dev/null 2>&1 \
-                          || docker buildx create --name dq-builder --use
-                        docker buildx use dq-builder
-                    '''
-                    sh """
-                        docker buildx build \
-                            --platform linux/amd64 \
-                            --push \
-                            --build-arg VITE_API_URL=${VITE_API_URL} \
-                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} \
-                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest \
-                            .
-                    """
-                }
-            }
-            post {
-                always {
-                    sh 'docker logout'
-                }
-            }
-        }
-
-        // ── 5. Déploiement sur la VM Azure ──────────────────────────────────
-        stage('Deploy to Azure VM') {
+        // ── 4. Build & Deploy directement sur la VM Azure ─────────────────
+        stage('Build & Deploy on Azure VM') {
             steps {
                 sshagent(credentials: ['azure-ssh-key']) {
                     sh """
+                        rsync -az --delete \
+                            --exclude='node_modules' \
+                            --exclude='.env' \
+                            --exclude='dist' \
+                            -e 'ssh -o StrictHostKeyChecking=no' \
+                            devops-quest-frontend/ \
+                            azureuser@${AZURE_VM_IP}:~/devops-quest-frontend/
+                    """
+                    sh """
                         ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
                             set -e
-                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                            cd ~/devops-quest-frontend
+                            docker build --build-arg VITE_API_URL=${VITE_API_URL} -t devops-quest-frontend:latest .
                             docker stop devops-quest-frontend 2>/dev/null || true
                             docker rm   devops-quest-frontend 2>/dev/null || true
                             docker run -d \
                                 --name devops-quest-frontend \
                                 --restart unless-stopped \
                                 -p 8080:80 \
-                                ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                                devops-quest-frontend:latest
                         '
                     """
                 }

@@ -52,41 +52,24 @@ pipeline {
             }
         }
 
-        // ── 4. Build & Push de l'image Docker (amd64 pour Azure) ─────────────
-        stage('Build & Push Docker Image') {
-            steps {
-                dir('devops-quest-api') {
-                    sh 'echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin'
-                    sh '''
-                        docker buildx inspect dq-builder >/dev/null 2>&1 \
-                          || docker buildx create --name dq-builder --use
-                        docker buildx use dq-builder
-                    '''
-                    sh """
-                        docker buildx build \
-                            --platform linux/amd64 \
-                            --push \
-                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:${BUILD_NUMBER} \
-                            -t ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest \
-                            .
-                    """
-                }
-            }
-            post {
-                always {
-                    sh 'docker logout'
-                }
-            }
-        }
-
-        // ── 6. Déploiement sur la VM Azure ──────────────────────────────────
-        stage('Deploy to Azure VM') {
+        // ── 4. Build & Deploy directement sur la VM Azure (x64 natif) ────────
+        stage('Build & Deploy on Azure VM') {
             steps {
                 sshagent(credentials: ['azure-ssh-key']) {
                     sh """
+                        rsync -az --delete \
+                            --exclude='node_modules' \
+                            --exclude='.env' \
+                            --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' \
+                            -e 'ssh -o StrictHostKeyChecking=no' \
+                            devops-quest-api/ \
+                            azureuser@${AZURE_VM_IP}:~/devops-quest-api/
+                    """
+                    sh """
                         ssh -o StrictHostKeyChecking=no azureuser@${AZURE_VM_IP} '
                             set -e
-                            docker pull ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                            cd ~/devops-quest-api
+                            docker build -t devops-quest-api:latest .
                             docker stop devops-quest-api 2>/dev/null || true
                             docker rm   devops-quest-api 2>/dev/null || true
                             docker run -d \
@@ -103,7 +86,7 @@ pipeline {
                                 -e "SMTP_PASS=${SMTP_PASS}" \
                                 -e "SMTP_FROM=DevOps Quest <${SMTP_USER}>" \
                                 -v devops-quest-data:/data \
-                                ${DOCKER_HUB_USR}/${IMAGE_NAME}:latest
+                                devops-quest-api:latest
                         '
                     """
                 }
