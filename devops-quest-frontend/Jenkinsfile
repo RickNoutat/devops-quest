@@ -83,7 +83,7 @@ EOF
             steps {
                 sh '''
                     sleep 5
-                    curl -sf https://devopsquest.duckdns.org/ | grep -q "DEVOPS_QUEST" \
+                    curl -sf https://devopsquest.duckdns.org/ | grep -q "DevOps Quest" \
                         && echo "Frontend OK" \
                         || { echo "Health check échoué"; exit 1; }
                 '''
