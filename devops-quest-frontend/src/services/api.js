@@ -21,7 +21,6 @@ async function apiFetch(endpoint, options = {}) {
 export const fetchParts = () => apiFetch("/api/parts");
 export const fetchPartById = (id) => apiFetch(`/api/parts/${id}`);
 export const fetchStats = () => apiFetch("/api/stats");
-export const fetchHealth = () => apiFetch("/api/health");
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 export const register = (data) =>
